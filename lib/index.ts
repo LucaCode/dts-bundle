@@ -52,6 +52,7 @@ export interface ModLine {
 
 export interface Result {
     file: string;
+    main: boolean;
     name: string;
     indent: string;
     exp: string;
@@ -183,7 +184,7 @@ export function bundle(options: Options): BundleResult {
             mainFileContent += generatedLine + "\n";
         });
         mainFile = path.resolve(baseDir, "dts-bundle.tmp." + exportName + ".d.ts");
-        fs.writeFileSync(mainFile, mainFileContent, 'utf8');
+        fs.writeFileSync(mainFile, mainFileContent, {encoding: 'utf8'});
     }
 
     trace('\n### find typings ###');
@@ -211,20 +212,23 @@ export function bundle(options: Options): BundleResult {
         let queue: string[] = [mainFile];
         let queueSeen: { [name: string]: boolean; } = Object.create(null);
 
+        let main = true;
         while (queue.length > 0) {
             let target = queue.shift();
             if (queueSeen[target]) {
+                main = false;
                 continue;
             }
             queueSeen[target] = true;
 
             // parse the file
-            let parse = parseFile(target);
+            let parse = parseFile(target,main);
             if (!mainParse) {
                 mainParse = parse;
             }
             fileMap[parse.file] = parse;
             pushUniqueArr(queue, parse.refs, parse.relativeImports);
+            main = false;
         }
     }
 
@@ -321,6 +325,17 @@ export function bundle(options: Options): BundleResult {
             trace(' - %s  ==>  %s', line.original, line.modified);
         });
     });
+
+    trace('\n### remove exports in non-main files ###');
+    usedTypings.forEach(parse => {
+        if(parse.main) return;
+        parse.lines.forEach((line) => {
+            let currentLine = line.modified || line.original;
+            line.modified = currentLine
+                .replace(/export default /g, '')
+                .replace(/export /g, '')
+        })
+    })
 
     // build collected content
     trace('\n### build output ###');
@@ -424,7 +439,7 @@ export function bundle(options: Options): BundleResult {
             }
         }
 
-        fs.writeFileSync(outFile, content, 'utf8');
+        fs.writeFileSync(outFile, content, {encoding: 'utf8'});
         bundleResult.emitted = true;
     } else {
         warning(" XXX Not emit due to exist files not found.")
@@ -557,13 +572,14 @@ export function bundle(options: Options): BundleResult {
     }
 
     // main info extractor
-    function parseFile(file: string): Result {
+    function parseFile(file: string,main: boolean): Result {
         const name = getModName(file);
 
         trace('%s (%s)', name, file);
 
         const res: Result = {
             file: file,
+            main: main,
             name: name,
             indent: indent,
             exp: getExpName(file),
